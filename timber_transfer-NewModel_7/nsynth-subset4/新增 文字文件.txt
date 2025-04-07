@@ -1,0 +1,94 @@
+# 假設音檔固定存放在這個路徑
+BASE_DIR = "./generated_audio"
+
+def play_note_in_thread(note):
+    def play():
+        # 確定檔案路徑
+        frequency = frequencies.get(note, black_frequencies.get(note))
+        if frequency is None:
+            print(f"音符 {note} 無效")
+            return
+        
+        file_path = os.path.join(BASE_DIR, f"{frequency}Hz.wav")
+        print(f"正在嘗試播放音檔: {file_path}")  # 打印檔案路徑
+
+        if os.path.exists(file_path):
+            playsound(file_path)
+        else:
+            print(f"音檔 {file_path} 不存在")
+    
+    threading.Thread(target=play).start()
+
+# 鋼琴鍵盤介面
+def piano_interface(root, main_frame, piano_frame):
+    # 清空 piano_frame 的內容，避免重疊
+    for widget in piano_frame.winfo_children():
+        widget.destroy()
+
+    piano_frame.pack(fill='both', expand=True)
+
+    button_frame = tk.Frame(piano_frame)
+    button_frame.pack(pady=20, padx=20)
+    button_frame_1 = tk.Frame(piano_frame)
+    button_frame_1.pack(pady=20, padx=80)
+
+    key_images = ["./white_key_images/Do.png", "./white_key_images/Re.png", 
+                  "./white_key_images/Mi.png", "./white_key_images/Fa.png", 
+                  "./white_key_images/Sol.png", "./white_key_images/La.png", 
+                  "./white_key_images/Si.png"]
+    notes = ["Do", "Re", "Mi", "Fa", "Sol", "La", "Ti", "Do_high"]
+
+    black_key_images = ["./black_key_images/Do#.png", "./black_key_images/Re#.png", 
+                        "./black_key_images/Fa#.png", "./black_key_images/Sol#.png", 
+                        "./black_key_images/La#.png"]
+    black_notes = ["Do#", "Re#", "Fa#", "Sol#", "La#"]
+
+    # 添加白鍵
+    for i, (note, image_path) in enumerate(zip(notes, key_images)):
+        img = tk.PhotoImage(file=image_path)
+        btn = tk.Button(button_frame, image=img, relief="flat", bd=0, command=lambda note=note: play_note_in_thread(note))
+        btn.grid(row=1, column=i, padx=0, pady=0)
+        btn.image = img
+
+    # 添加黑鍵
+    black_key_positions = [1, 2, 4, 5, 6]  # 黑鍵的位置（相對於白鍵）
+    for i, (note, image_path) in enumerate(zip(black_notes, black_key_images)):
+        img = tk.PhotoImage(file=image_path)
+        btn = tk.Button(button_frame, image=img, relief="flat", bd=0, command=lambda note=note: play_note_in_thread(note))
+        btn.place(relx=black_key_positions[i]/7, rely=0, anchor='n', width=35, height=150)
+        btn.image = img
+
+    play_button = tk.Button(button_frame_1, text="播放", font=("Arial", 16), command=lambda: switch_to_main_interface(main_frame, piano_frame, target_frame),
+                             bg="green", fg="white", activebackground="lightblue", activeforeground="black", width=5, height=2)
+    play_button.grid(row=0, column=0, padx=0, pady=0)
+
+    store_button = tk.Button(button_frame_1, text="儲存", font=("Arial", 16), command=lambda: switch_to_main_interface(main_frame, piano_frame, target_frame),
+                                  bg="green", fg="white", activebackground="lightblue", activeforeground="black", width=5, height=2)
+    store_button.grid(row=0, column=1, padx=0, pady=0)
+
+    return_button = tk.Button(button_frame_1, text="返回", font=("Arial", 16), command=lambda: switch_to_main_interface(main_frame, piano_frame, target_frame),
+                                  bg="green", fg="white", activebackground="lightblue", activeforeground="black", width=5, height=2)
+    return_button.grid(row=0, column=2, padx=0, pady=0)
+
+
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("操作視窗")
+    root.geometry("900x450")
+    root.resizable(True, True)
+
+    main_frame = tk.Frame(root)
+    piano_frame = tk.Frame(root)
+    target_frame= tk.Frame(root)
+    three_frame = tk.Frame(root)
+
+    main_interface(root, main_frame, piano_frame, target_frame, three_frame)
+    main_frame.pack(fill='both', expand=True)
+    piano_frame.pack_forget()
+    target_frame.pack_forget()
+    three_frame.pack_forget()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
