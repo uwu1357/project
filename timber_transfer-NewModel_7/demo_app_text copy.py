@@ -277,7 +277,8 @@ class DemoApp(QMainWindow):
 
     def init_source_chart(self):
         if G.source_audio_file_name is not None:
-            source_text, source_audio, source_image = G.sampel_source_audio_data(G.source_audio_file_name)
+            source_text, source_audio, source_image = G.sampel_source_audio_data(
+                G.source_audio_file_name)
             # 改用 update_chart_view 統一處理，使用 fitInView
             update_chart_view(self.source_chart_view, source_image)
 
@@ -288,47 +289,68 @@ class DemoApp(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(150, 0, 0, 0)  # 設定左邊距離
+        main_layout.setContentsMargins(50, 0, 0, 0)  # 設定左邊距離
 
         # 左邊圖片按鈕區域
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         self.image_buttons = {}
+
         for key, image_path in self.image_paths_1.items():
+            # 建立一個容器，把標籤和按鈕垂直排列
+            container = QWidget()
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # 在按鈕上方顯示圖片名稱
+            label = QLabel(key)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("font-size: 16px;")
+
+            # 建立按鈕並設定 icon
             btn = QPushButton()
             btn.setIcon(QIcon(image_path))
-            # icon 固定方形
             btn.setIconSize(QSize(80, 80))
-            # 按鈕本體長方形 (寬 = 高 * 2)
             init_h = 100
             init_w = init_h * 2
             btn.setFixedSize(init_w, init_h)
-            btn.clicked.connect(lambda _, k=key: self.on_image_button_clicked(k))
+            btn.clicked.connect(
+                lambda _, k=key: self.on_image_button_clicked(k))
 
+            # 把標籤與按鈕加入容器
+            container_layout.addWidget(label)
+            container_layout.addWidget(btn)
+
+            # 加入主佈局
+            left_layout.addWidget(container)
             self.image_buttons[key] = btn
-            left_layout.addWidget(btn)
+
         left_widget.setLayout(left_layout)
         main_layout.addWidget(left_widget)
 
         # 中間選單區域
         middle_widget = QWidget()
         middle_layout = QVBoxLayout(middle_widget)
-        self.path_selector = QComboBox()
+        # 調整上下邊距縮短選單區域
+        middle_layout.setContentsMargins(0, 100, 0, 100)
+        middle_layout.setSpacing(5)
+
         self.file_list_widget = QListWidget()
-        self.path_selector.setStyleSheet("font-size: 24px;")
         self.file_list_widget.setStyleSheet("font-size: 24px;")
-        self.path_selector.addItems(self.paths.keys())
-        self.path_selector.currentIndexChanged.connect(self.on_path_selected)
         self.file_list_widget.itemClicked.connect(self.on_file_selected)
+
         middle_layout.addWidget(self.file_list_widget)
+
         middle_widget.setLayout(middle_layout)
         middle_external_layout = QHBoxLayout()
         middle_external_layout.setContentsMargins(0, 0, 100, 0)
         middle_external_layout.addWidget(middle_widget)
-
         main_layout.addLayout(middle_external_layout)
-        # 初始化檔案列表
-        self.update_file_list_widget(self.path_selector.currentText())
+
+        # 初始化檔案列表，預設顯示第一個類別
+        first_key = next(iter(self.paths))
+        self.update_file_list_widget(first_key)
 
         # 右邊按鈕區域
         right_widget = QWidget()
@@ -348,7 +370,6 @@ class DemoApp(QMainWindow):
         main_layout.setStretch(2, 2)  # 右邊區域
 
     def initUI_2(self):
-        """第二頁介面：左側圖片區、右側三個圖表區，下方為導覽按鈕"""
         self.setWindowTitle('Demo App - Page 2')
         self.showMaximized()
 
@@ -367,29 +388,39 @@ class DemoApp(QMainWindow):
             "font-size: 24px; font-weight: bold; margin-bottom: 10px;")
         main_layout.addWidget(title_label)
 
-        # 上半部：內容分左右兩區
-        upper_layout = QHBoxLayout()
-        upper_layout.setSpacing(0)                 # 消除左右區塊之間的間隙
-        upper_layout.setContentsMargins(0, 0, 0, 0)  # 消除邊距
+        main_layout.addSpacing(20)
 
-        # 左側：垂直排列圖片按鈕 (例如樂器圖示)
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
+        button_bar = QWidget()
+        button_layout = QHBoxLayout(button_bar)
+        button_layout.setSpacing(10)
+        button_layout.setContentsMargins(0, 0, 0, 10)
         self.image_buttons = {}
-        for key, image_path in self.image_paths_2.items():
-            btn = QPushButton()
-            btn.setIcon(QIcon(image_path))
-            # icon 固定方形
-            btn.setIconSize(QSize(80, 80))
-            # 按鈕本體固定正方形
-            btn.setFixedSize(100, 100)
-            btn.clicked.connect(lambda _, fn=self.target_files[list(self.image_paths_2).index(key)]: 
-                                self.select_instrument(fn))
+        for idx, (key, image_path) in enumerate(self.image_paths_2.items()):
+            container = QWidget()
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+            # 樂器名稱文字
+            label = QLabel(key)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("font-size: 16px;")
+            container_layout.addWidget(label)
+
+            # 長方形按鈕
+            btn = QPushButton()
+            init_h = 100
+            init_w = init_h * 2
+            btn.setFixedSize(init_w, init_h)
+            btn.setIcon(QIcon(image_path))
+            btn.setIconSize(QSize(int(init_h * 0.8), int(init_h * 0.8)))
+            fn = self.target_files[idx]
+            btn.clicked.connect(lambda _, f=fn: self.select_instrument(f))
+            container_layout.addWidget(btn)
+
+            button_layout.addWidget(container)
             self.image_buttons[key] = btn
-            left_layout.addWidget(btn)
-        left_widget.setLayout(left_layout)
-        upper_layout.addWidget(left_widget,0.5)
+        main_layout.addWidget(button_bar)
 
         # 右側：水平排列三個圖表區 (Source、Target、Rec)
         charts_widget = QWidget()
@@ -409,10 +440,10 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 70px 10px 0 10px;
+                padding: 30px 10px 0 10px;
                 background-color: transparent;
             }
-        """) 
+        """)
         source_layout = QVBoxLayout()
         self.source_chart_view = QGraphicsView(self)
         self.source_chart_view.setFixedSize(450, 400)
@@ -433,10 +464,10 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 70px 10px 0 10px;
+                padding: 30px 10px 0 10px;
                 background-color: transparent;
             }
-        """) 
+        """)
         target_layout = QVBoxLayout()
         self.target_chart_view = QGraphicsView(self)
         self.target_chart_view.setFixedSize(450, 400)
@@ -446,7 +477,7 @@ class DemoApp(QMainWindow):
         charts_layout.addWidget(target_group)
 
         # Rec 圖組
-        rec_group = QGroupBox("Rec")
+        rec_group = QGroupBox("Result")
         rec_group.setStyleSheet("""
             QGroupBox { 
                 font-size: 18px; 
@@ -457,7 +488,7 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 70px 10px 0 10px;
+                padding: 30px 10px 0 10px;
                 background-color: transparent;
             }
         """)
@@ -471,14 +502,12 @@ class DemoApp(QMainWindow):
         charts_layout.addWidget(rec_group)
 
         charts_widget.setLayout(charts_layout)
-        upper_layout.addWidget(charts_widget, 3)  # 右側區域佔比例 2
-
-        main_layout.addLayout(upper_layout)
+        main_layout.addWidget(charts_widget)
 
         # 下半部：導覽按鈕區域
 
         navigation_button_layout = QHBoxLayout()
-        navigation_button_layout.setContentsMargins(0, 0, 0, -20)
+        navigation_button_layout.setContentsMargins(0, 0, 0, 20)
         navigation_button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_button_layout.setSpacing(100)
 
@@ -543,7 +572,7 @@ class DemoApp(QMainWindow):
 
     @pyqtSlot()
     def on_image_button_clicked(self, key):
-        self.path_selector.setCurrentText(key)
+        self.update_file_list_widget(key)
 
     @pyqtSlot()
     def on_path_selected(self):
