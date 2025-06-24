@@ -315,6 +315,7 @@ class DemoApp(QMainWindow):
             init_h = 100
             init_w = init_h * 2
             btn.setFixedSize(init_w, init_h)
+            btn.setStyleSheet("background-color: white; ")
             btn.clicked.connect(
                 lambda _, k=key: self.on_image_button_clicked(k))
 
@@ -414,6 +415,7 @@ class DemoApp(QMainWindow):
             btn.setFixedSize(init_w, init_h)
             btn.setIcon(QIcon(image_path))
             btn.setIconSize(QSize(int(init_h * 0.8), int(init_h * 0.8)))
+            btn.setStyleSheet("background-color: white; ")
             fn = self.target_files[idx]
             btn.clicked.connect(lambda _, f=fn: self.select_instrument(f))
             container_layout.addWidget(btn)
@@ -440,7 +442,7 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 30px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
@@ -464,7 +466,7 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 30px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
@@ -488,7 +490,7 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 30px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
@@ -507,7 +509,7 @@ class DemoApp(QMainWindow):
         # 下半部：導覽按鈕區域
 
         navigation_button_layout = QHBoxLayout()
-        navigation_button_layout.setContentsMargins(0, 0, 0, 20)
+        navigation_button_layout.setContentsMargins(0, 0, 0, 40)
         navigation_button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_button_layout.setSpacing(100)
 
