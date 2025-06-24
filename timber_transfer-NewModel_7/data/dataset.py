@@ -9,7 +9,7 @@ class NSynthDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         data_mode: str,
-        #dir_path: str = "C:/timber_transfer-NewModel_1/timber_transfer-NewModel/nsynth-subset",
+        # dir_path: str = "C:/timber_transfer-NewModel_1/timber_transfer-NewModel/nsynth-subset",
         dir_path: str = "./nsynth-subset4",
         sr: int = 16000,
         frequency_with_confidence: bool = False,
@@ -69,9 +69,7 @@ class NSynthDataset(torch.utils.data.Dataset):
         idx = self.audio_list.index(os.path.join(
             self.data_mode_dir_path, f"{self.info_type['signal']}\{fn}.npy"))
         return self.__getitem__(idx)
-    
-    
-    
+
     def update_audio_list(self):
         """動態更新檔案列表"""
         signal_path = os.path.join(self.data_mode_dir_path, "signal\\*")

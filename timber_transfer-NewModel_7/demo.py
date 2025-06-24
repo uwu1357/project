@@ -48,13 +48,13 @@ class InstrumentConverterApp(QWidget):
     def __init__(self):
         super().__init__()
         self.paths = {
-            "Bass": ".\\nsynth-subset5\\Bass\\test\\signal",
-            "Brass": ".\\nsynth-subset5\\Brass\\test\\signal",
-            "Flute": ".\\nsynth-subset5\\Flute\\test\\signal",
-            "Guitar": ".\\nsynth-subset5\\Guitar\\test\\signal",
-            "Piano": ".\\nsynth-subset5\\Piano\\signal",
-            "Mallet": ".\\nsynth-subset5\\Mallet\\test\\signal",
-            "Audio": ".\\nsynth-subset5\\audio\\signal",
+            "Bass": "./nsynth-subset5/Bass/test/signal",
+            "Brass": "./nsynth-subset5/Brass/test/signal",
+            "Flute": "./nsynth-subset5/Flute/test/signal",
+            "Guitar": "./nsynth-subset5/Guitar/test/signal",
+            "Piano": "./nsynth-subset5/Piano/signal",
+            "Mallet": "./nsynth-subset5/Mallet/test/signal",
+            "Audio": "./nsynth-subset5/audio/signal",
         }
 
         self.image_paths = {
