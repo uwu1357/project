@@ -1,22 +1,33 @@
 # %%
 import time
+import pygame
+import shutil
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtCore import pyqtSlot, QUrl, QTimer, Qt, QSize, pyqtSignal, QPointF
+from PyQt6.QtCore import pyqtSlot, QUrl, QTimer, Qt, QSize, QRect
 from PyQt6.QtGui import QIcon, QPixmap   # 正確匯入 QIcon
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton, QRadioButton, QComboBox, QLineEdit, QGroupBox, QGridLayout, QGraphicsView, QGraphicsScene, QSlider, QListWidget, QListWidgetItem, QSizePolicy
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QPushButton, QRadioButton, QComboBox, QLineEdit, QGroupBox, QGridLayout, QGraphicsView, QGraphicsScene, QSlider, QListWidget, QListWidgetItem, QSizePolicy
 from components.timbre_transformer.TimberTransformer import TimbreTransformer
+from components.timbre_transformer.utils import extract_loudness, get_A_weight
+from components.timbre_transformer.utils import extract_pitch, get_extract_pitch_needs
 from tools.utils import cal_loudness_norm
+from pydub import AudioSegment
+import json
 from data.dataset2 import NSynthDataset
 import os
 import torch
+import torchaudio
 import random
 from glob import glob
 from numpy import ndarray
 import numpy as np
+from datetime import datetime
 from matplotlib import pyplot as plt
 import soundfile as sf
 import tempfile
+import librosa
+import librosa.display
+import threading
 import sys
 sys.path.append("..")
 
@@ -173,15 +184,6 @@ class GlobalInfo:
         return fn, (16000, s), fig_s
 
 
-class ClickableGraphicsView(QGraphicsView):
-    clicked = pyqtSignal(QPointF)
-
-    def mousePressEvent(self, event):
-        pt = self.mapToScene(event.pos())
-        self.clicked.emit(pt)
-        super().mousePressEvent(event)
-
-
 class AudioPlayer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -239,6 +241,9 @@ G = GlobalInfo()
 class DemoApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.record_sequence = []
+        self.play_sequence   = []
+        self.last_key_time   = None
         self.paths = {
             "Bass":     "./nsynth-subset5/Bass/test/signal",
             "Brass":    "./nsynth-subset5/Brass/test/signal",
@@ -271,7 +276,7 @@ class DemoApp(QMainWindow):
         self.right_buttons = {
             "Play Music":       self.play_music,
             "Pause":            self.pause_music,
-            # "Visual Keyboard":  self.switch_piano_page,
+            "Visual Keyboard":  self.switch_piano_page,
             # "Microphone":       self.switch_recording_page,
             "NEXT":             self.switch_page,
         }
@@ -286,10 +291,10 @@ class DemoApp(QMainWindow):
 
     def init_source_chart(self):
         if G.source_audio_file_name is not None:
-            source_text, (sample_rate, audio_data), source_image = G.sampel_source_audio_data(
+            source_text, source_audio, source_image = G.sampel_source_audio_data(
                 G.source_audio_file_name)
+            # 改用 update_chart_view 統一處理，使用 fitInView
             update_chart_view(self.source_chart_view, source_image)
-            self.source_audio_player.set_audio(audio_data, sample_rate)
 
     def initUI(self):
         self.setWindowTitle('Demo App')
@@ -385,7 +390,7 @@ class DemoApp(QMainWindow):
 
         self.target_audio_player = AudioPlayer(self)
         self.rec_audio_player = AudioPlayer(self)
-
+        # 主佈局（垂直排列）
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -397,6 +402,8 @@ class DemoApp(QMainWindow):
         title_label.setStyleSheet(
             "font-size: 24px; font-weight: bold; margin-bottom: 10px;")
         main_layout.addWidget(title_label)
+
+        main_layout.addSpacing(20)
 
         button_bar = QWidget()
         button_layout = QHBoxLayout(button_bar)
@@ -449,14 +456,14 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 0px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
         source_layout = QVBoxLayout()
-        self.source_chart_view = ClickableGraphicsView(self)
+        self.source_chart_view = QGraphicsView(self)
         self.source_chart_view.setFixedSize(450, 400)
-        self.source_chart_view.clicked.connect(self.on_source_chart_clicked)
+        self.source_chart_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         source_layout.addWidget(self.source_chart_view)
         source_group.setLayout(source_layout)
         charts_layout.addWidget(source_group)
@@ -473,14 +480,14 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 0px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
         target_layout = QVBoxLayout()
-        self.target_chart_view = ClickableGraphicsView(self)
+        self.target_chart_view = QGraphicsView(self)
         self.target_chart_view.setFixedSize(450, 400)
-        self.target_chart_view.clicked.connect(self.on_target_chart_clicked)
+        self.target_chart_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         target_layout.addWidget(self.target_chart_view)
         target_group.setLayout(target_layout)
         charts_layout.addWidget(target_group)
@@ -497,37 +504,22 @@ class DemoApp(QMainWindow):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 0px 10px 0 10px;
+                padding: 20px 10px 0 10px;
                 background-color: transparent;
             }
         """)
 
         rec_layout = QVBoxLayout()
-        self.rec_chart_view = ClickableGraphicsView(self)
+        self.rec_chart_view = QGraphicsView(self)
         self.rec_chart_view.setFixedSize(450, 400)
-        self.rec_chart_view.clicked.connect(self.on_rec_chart_clicked)
+        self.rec_chart_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
         rec_layout.addWidget(self.rec_chart_view)
         rec_group.setLayout(rec_layout)
         charts_layout.addWidget(rec_group)
 
-        self.source_audio_player = AudioPlayer(self)
-        self.source_chart_view.clicked.connect(self.source_audio_player.play)
-        self.target_chart_view.clicked.connect(self.target_audio_player.play)
-        self.rec_chart_view.clicked.connect(self.rec_audio_player.play)
-
         charts_widget.setLayout(charts_layout)
         main_layout.addWidget(charts_widget)
 
-        self.timer_label = QLabel("", self)
-        self.timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.timer_label.setStyleSheet(
-            "font-size:16px; color:#555; margin-bottom:10px;")
-        main_layout.addWidget(self.timer_label)
-
-        main_layout.addSpacing(20)
-        main_layout.addWidget(self.timer_label,
-                              alignment=Qt.AlignmentFlag.AlignCenter)
-        main_layout.addSpacing(10)
         # 下半部：導覽按鈕區域
 
         navigation_button_layout = QHBoxLayout()
@@ -561,20 +553,152 @@ class DemoApp(QMainWindow):
         if G.source_audio_file_name is not None:
             QTimer.singleShot(100, self.init_source_chart)
 
+    def initUI_3(self):
+        """建立鋼琴介面，並保留底部空白放置返回按鈕"""
+        self.record_sequence.clear()
+        self.play_sequence.clear()
+        self.last_key_time = None
+        self.piano_player = QMediaPlayer(self)
+        self.piano_audio_out = QAudioOutput(self)
+        self.piano_player.setAudioOutput(self.piano_audio_out)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        self.setWindowTitle('Demo App - Page 3')
+        self.setCentralWidget(container)
+
+        # 標題
+        title = QLabel("Tap to start recording", container)
+        title.setStyleSheet("font-size:24px; font-weight:bold;")
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.sounds = {
+            "do0": "piano_sounds/261.63Hz.wav",  # C4
+            "re0": "piano_sounds/293.66Hz.wav",  # D4
+            "mi0": "piano_sounds/329.63Hz.wav",  # E4
+            "fa0": "piano_sounds/349.23Hz.wav",  # F4
+            "sol0": "piano_sounds/392.00Hz.wav",  # G4
+            "la0": "piano_sounds/440.00Hz.wav",  # A4
+            "si0": "piano_sounds/493.88Hz.wav",  # B4
+            "do1": "piano_sounds/523.25Hz.wav",  # C5
+            "doS0": "piano_sounds/277.18Hz.wav",  # C#4
+            "reS0": "piano_sounds/311.13Hz.wav",  # D#4
+            "faS0": "piano_sounds/369.99Hz.wav",  # F#4
+            "solS0": "piano_sounds/415.30Hz.wav",  # G#4
+            "laS0": "piano_sounds/466.16Hz.wav",  # A#4
+        }
+        self.last_saved_path = None
+        self.last_timestamp = None  # 儲存上一次音符被按下的時間
+
+        offset_x, offset_y = 100, 50
+        white_w, white_h = 88, 378
+        black_w, black_h = 58, 244
+        gap = 28  # 相鄰白鍵之間的水平間距
+
+        # 白鍵
+        white_keys = ["do0", "re0", "mi0", "fa0", "sol0", "la0", "si0", "do1"]
+
+        white_frame = QWidget()
+        white_layout = QHBoxLayout(white_frame)
+        white_layout.setSpacing(0)
+        white_layout.setContentsMargins(0, 0, 0, 0)
+        for key in white_keys:
+            btn = QPushButton("", white_frame)
+            btn.setFixedSize(white_w, white_h)
+            btn.setStyleSheet("background-color:#FFF; border:1px solid #000;")
+            btn.clicked.connect(lambda _, k=key: self.play_piano_sound(k))
+            white_layout.addWidget(btn)
+
+        # 用一個水平 box 兩邊加 stretch，把 white_frame 置中
+        layout.addStretch(1)
+        center_hbox = QHBoxLayout()
+        center_hbox.addStretch(1)
+        center_hbox.addWidget(white_frame)
+        center_hbox.addStretch(1)
+        layout.addLayout(center_hbox)
+
+        layout.addStretch(1)
+
+        # 黑鍵：指定要插入在哪幾個白鍵之間
+        black_positions = {
+            "doS0": 0.7,
+            "reS0": 1.7,
+            "faS0": 3.7,
+            "solS0": 4.7,
+            "laS0": 5.7
+        }
+        for key, pos in black_positions.items():
+            btn = QPushButton("", white_frame)
+            x = int(pos * white_w)
+            btn.setGeometry(x, 0, black_w, black_h)
+            btn.setStyleSheet("background-color:#000;")
+            btn.clicked.connect(lambda _, k=key: self.play_piano_sound(k))
+            btn.raise_()
+
+        # 設定清除按鈕
+        clear_button = QPushButton("Clear", self)
+        clear_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        clear_button.clicked.connect(self.clear_action)
+
+        # 設定儲存按鈕
+        save_button = QPushButton("Save", self)
+        save_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        save_button.clicked.connect(self.save_action)
+
+        # 設定撥放按鈕
+        play_piano_button = QPushButton("Play_piano", self)
+        play_piano_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        play_piano_button.clicked.connect(self.play_saved_sequence)
+
+        # 鋼琴彈奏處理按鈕
+        piano_audio_button = QPushButton("Piano_prosses", self)
+        piano_audio_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        piano_audio_button.clicked.connect(self.process_audio_piano)
+
+        # 設定返回按鈕
+        back_button = QPushButton("Back", self)
+        back_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        back_button.clicked.connect(self.switch_back_page)
+
+        # 設定next按鈕
+        next_button = QPushButton("Next", self)
+        next_button.setStyleSheet(
+            "font-size: 18px; padding: 10px 20px;")  # 設定字型大小與內距
+        next_button.clicked.connect(self.switch_page)
+
+        hbar = QHBoxLayout()
+        hbar.addWidget(clear_button)
+        hbar.addWidget(save_button)
+        hbar.addWidget(play_piano_button)
+        hbar.addWidget(piano_audio_button)
+        hbar.addWidget(back_button)
+        hbar.addWidget(next_button)
+        layout.addLayout(hbar)
+        layout.addStretch(1)
+
+        # 設定頁面佈局
+        self.setCentralWidget(container)
+
     def resizeEvent(self, event):
+        # 在 Page2 與 Page3 時都跳過圖片按鈕的自動重設
         if hasattr(self, 'image_buttons'):
-            if self.windowTitle() == "Demo App - Page 2":
-                # 第二頁不動
+            title = self.windowTitle()
+            if title in ("Demo App - Page 2", "Demo App - Page 3"):
                 return super().resizeEvent(event)
 
-            # 第一頁：寬 = 高 * 2，隨視窗高度改變
+            # Page1 狀況，依視窗高度動態調整左側按鈕大小
             new_h = max(min(self.height() // 5, 100), 100)
             new_w = new_h * 2
             for btn in self.image_buttons.values():
                 btn.setFixedSize(new_w, new_h)
                 btn.setIconSize(QSize(int(new_w * 0.8), int(new_h * 0.8)))
 
-        super().resizeEvent(event)
+        return super().resizeEvent(event)
 
     @pyqtSlot()
     def play_music(self):
@@ -588,6 +712,7 @@ class DemoApp(QMainWindow):
     @pyqtSlot()
     def switch_piano_page(self):
         print("Switch to Visual Keyboard page")
+        self.initUI_3()
 
     @pyqtSlot()
     def switch_page(self):
@@ -671,10 +796,7 @@ class DemoApp(QMainWindow):
             sample_rate, audio_data = rec_audio
             self.rec_audio_player.set_audio(audio_data, sample_rate)
             end = time.time()
-            elapsed = end - start
-            self.timer_label.setText(f"Generation time: {elapsed:.2f} s")
-
-            print(f"generation time: {elapsed}")
+            print(f"generation time: {end - start}")
         except Exception as e:
             print(f"生成錯誤: {str(e)}")
 
@@ -753,32 +875,6 @@ class DemoApp(QMainWindow):
         result = G.change_model_input(source, ref)
         self.generate_selection_text.setText(result)
 
-    def stop_all_audio(self):
-        """停止所有 AudioPlayer 中正在播放的音檔"""
-        for player in (self.source_audio_player,
-                       self.target_audio_player,
-                       self.rec_audio_player):
-            try:
-                # QMediaPlayer 的 stop() 會重置播放位置
-                player.player.stop()
-            except Exception:
-                pass
-
-    @pyqtSlot(QPointF)
-    def on_source_chart_clicked(self, pt):
-        self.stop_all_audio()
-        self.source_audio_player.play()
-
-    @pyqtSlot(QPointF)
-    def on_target_chart_clicked(self, pt):
-        self.stop_all_audio()
-        self.target_audio_player.play()
-
-    @pyqtSlot(QPointF)
-    def on_rec_chart_clicked(self, pt):
-        self.stop_all_audio()
-        self.rec_audio_player.play()
-
     @pyqtSlot()
     def on_generate_clicked(self):
         try:
@@ -802,6 +898,465 @@ class DemoApp(QMainWindow):
         except Exception as e:
             print(f"生成錯誤: {str(e)}")
 
+            # ------p3
+    def clear_action(self):
+
+        self.audio_sequence = AudioSegment.empty()
+
+    def play_piano_sound(self, key):
+        # """播放對應的鋼琴鍵音檔並記錄音符，合成新的音檔"""
+        sound_path = self.sounds.get(key, None)
+
+        if sound_path and os.path.exists(sound_path):
+            # 播放音檔
+            pygame.mixer.init()
+            pygame.mixer.music.load(sound_path)
+            pygame.mixer.music.play()
+
+            # 記錄按下的音符
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # 取得當前時間
+            print(f"[DEBUG] 按下音符：{key}，時間：{timestamp}")
+
+            # 初始化音頻合成序列
+            if not hasattr(self, 'audio_sequence'):
+                self.audio_sequence = AudioSegment.empty()
+
+            # 把音符音檔加入到合成音檔中
+            sound = AudioSegment.from_wav(sound_path)
+            self.audio_sequence += sound  # 合成音檔
+
+        else:
+            print(f"[DEBUG] 音檔未找到: {sound_path}")
+
+    def save_action(self):
+        """儲存合成的音檔並使用當前時間戳確保檔案名稱唯一"""
+        if hasattr(self, 'audio_sequence') and len(self.audio_sequence) > 0:
+            # 指定儲存的資料夾和檔案名稱
+            folder_path = 'nsynth-subset5/Piano/wav'  # 這是您可以修改的資料夾名稱
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.last_saved_path = os.path.join(
+                folder_path, f"recorded_piano_song_{timestamp}_050-XXX-050.wav")
+
+            # 確保資料夾存在
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+
+            # 儲存音檔
+            self.audio_sequence.export(self.last_saved_path, format="wav")
+            print(f"[DEBUG] 合成音檔已儲存至: {self.last_saved_path}")
+        else:
+            print("[DEBUG] 沒有錄製音符，無法儲存音檔")
+
+    def play_save_piano_music(self):
+        """播放儲存的音檔"""
+        if self.last_saved_path and os.path.exists(self.last_saved_path):
+            pygame.mixer.init()
+            pygame.mixer.music.load(self.last_saved_path)
+            pygame.mixer.music.play()
+            print(f"正在播放錄音：{self.last_saved_path}")
+
+            # 播放結束後釋放資源
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)  # 等待音樂播放結束
+            pygame.mixer.quit()  # 播放結束後釋放資源
+        else:
+            print("沒有錄音文件")
+
+    def process_audio_piano(self):
+        # 開始計時
+        start_time = time.time()
+
+        # 儲存錄音並獲取檔案路徑
+        audio_file_path = self.last_saved_path
+        # 設定輸入 .wav 檔案路徑
+        wav_file = audio_file_path
+
+        # 設定輸出資料夾
+        output_dir = "nsynth-subset5/Piano"  # 請更換為你想儲存特徵的資料夾名稱
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 建立特徵提取器
+        extractor = FeatureExtractor(wav_file, output_dir)
+
+        # 執行特徵提取
+        extractor.extract_features()
+
+        # 保存音訊信號為 .npy 檔案
+        extractor.save_signal_as_npy()
+
+        base_dir = "nsynth-subset5/Piano"
+        rename_files_1(base_dir, midi_value)
+
+        # 計算並顯示處理時間
+        elapsed_time = time.time() - start_time
+        print(f"音頻處理已完成！總共花費時間: {elapsed_time:.2f} 秒")
+
+        self.audio_sequence = AudioSegment.empty()  # 清空音檔序列
+
+        self.source_audio_file_name = rename_files_1(
+            base_dir, midi_value)  # 取得音檔名稱
+
+        # 顯示完成訊息
+        QMessageBox.information(None, "完成", "音頻轉換為 .npy 格式已完成！")
+
+
+    #-------------------------------p4
+
+
+
+
+
+
+    # -------------------------------------
+    @pyqtSlot()
+    def process_audio_piano(self):
+        """示範：後續可接入音訊處理流程"""
+        print("Processing piano sequence:", self.piano_sequence)
+
+    @pyqtSlot()
+    def switch_back_page(self):
+        """返回第一頁"""
+        print("Back to Page 1")
+        self.centralWidget().deleteLater()
+        self.initUI()
+
+    @pyqtSlot()
+    def switch_page(self):
+        """Next → 切到 Page 2"""
+        print("Go to Page 2")
+        self.centralWidget().deleteLater()
+        self.initUI_2()
+
+
+
+
+class FeatureExtractor:
+    def __init__(self, wav_file_path: str, output_dir: str, sr: int = 16000, n_fft: int = 1024):
+        self.wav_file_path = wav_file_path
+        self.output_dir = output_dir
+        self.sr = sr  # 目標取樣率 16kHz
+        self.n_fft = n_fft
+        self.hop_length = n_fft // 4
+
+        # 讀取音訊
+        self.signal = self.load_signal()
+        self.midi_value = None
+
+        # 建立特徵保存資料夾
+        self.mfcc_dir = os.path.join(output_dir, "mfcc")
+        self.frequency_dir = os.path.join(output_dir, "frequency")
+        self.frequency_c_dir = os.path.join(output_dir, "frequency_c")
+        self.loudness_dir = os.path.join(output_dir, "loudness")
+        self.loudness_old_dir = os.path.join(
+            output_dir, "loudness_old")  # 新增 loudness_old 資料夾
+        self.signal_dir = os.path.join(output_dir, "signal")  # 新增 signal 資料夾
+        os.makedirs(self.mfcc_dir, exist_ok=True)
+        os.makedirs(self.frequency_dir, exist_ok=True)
+        os.makedirs(self.frequency_c_dir, exist_ok=True)
+        os.makedirs(self.loudness_dir, exist_ok=True)
+        # 確保 loudness_old 資料夾存在
+        os.makedirs(self.loudness_old_dir, exist_ok=True)
+        os.makedirs(self.signal_dir, exist_ok=True)  # 確保 signal 資料夾存在
+
+    def load_signal(self):
+        """載入 .wav 音訊，確保為 16kHz 單聲道"""
+        signal, sample_rate = torchaudio.load(self.wav_file_path)
+
+        # 轉為單聲道（如果是立體聲）
+        if signal.shape[0] > 1:
+            signal = torch.mean(signal, dim=0, keepdim=True)
+
+        # 重新取樣到 16kHz（如果必要）
+        if sample_rate != self.sr:
+            resampler = torchaudio.transforms.Resample(
+                orig_freq=sample_rate, new_freq=self.sr)
+            signal = resampler(signal)
+
+        return signal
+
+    def save_signal_as_npy(self):
+        """將音訊信號儲存為 .npy 檔案"""
+        # 保存音訊信號到 signal 資料夾
+        signal_output_path = os.path.join(
+            self.output_dir, "signal", f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+
+        # 確保 signal 資料夾存在
+        os.makedirs(os.path.dirname(signal_output_path), exist_ok=True)
+
+        # 儲存信號
+        np.save(signal_output_path, self.signal.squeeze(
+            0).cpu().numpy())  # 移除額外維度並保存為 .npy 檔案
+        print(f"音訊信號已保存至 {signal_output_path}")
+
+    def extract_features(self):
+        """提取所有特徵並保存"""
+        # 提取 MFCC 特徵
+        extract_mfcc = torchaudio.transforms.MFCC(
+            sample_rate=self.sr,
+            n_mfcc=80,
+            melkwargs=dict(n_fft=self.n_fft, hop_length=self.hop_length,
+                           n_mels=128, f_min=20.0, f_max=8000.0)
+        )
+        mfcc = extract_mfcc(self.signal)
+        mfcc_output_path = os.path.join(
+            self.mfcc_dir, f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+        np.save(mfcc_output_path, mfcc.squeeze(0).cpu().numpy())
+        print(f"MFCC 特徵已保存至 {mfcc_output_path}")
+
+        # 提取頻率特徵並計算 MIDI 音符
+        device, cr, m_sec = get_extract_pitch_needs(device=torch.device("cpu"))
+        frequency_c = extract_pitch(
+            signal=self.signal,
+            device=device,
+            cr=cr,
+            m_sec=m_sec,
+            sampling_rate=self.sr,
+            with_confidence=True,
+        )
+
+        if torch.any(torch.isnan(frequency_c)):
+            print("錯誤：頻率特徵中包含 NaN，無法保存或處理。")
+            return
+
+        frequency_output_path = os.path.join(
+            self.frequency_dir, f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+        np.save(frequency_output_path, frequency_c.squeeze(0).cpu().numpy())
+        print(f"頻率特徵已保存至 {frequency_output_path}")
+
+        frequency_c_output_path = os.path.join(
+            self.frequency_c_dir, f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+        np.save(frequency_c_output_path, frequency_c.squeeze(0).cpu().numpy())
+        print(f"頻率特徵已保存至 {frequency_c_output_path}")
+
+        global midi_value
+        freq_to_midi = FrequencyToMIDI(frequency_output_path)
+        midi_value = freq_to_midi.calculate_midi()
+        if midi_value is not None:
+            print(f"計算出的 MIDI 音符是: {midi_value}")
+
+        # 提取響度特徵
+        a_weighting = get_A_weight().to(torch.device("cpu"))
+        loudness = extract_loudness(self.signal, a_weighting)
+
+        if torch.any(torch.isnan(loudness)):
+            print("錯誤：響度特徵中包含 NaN，無法保存或處理。")
+            return
+
+        loudness_output_path = os.path.join(
+            self.loudness_dir, f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+        np.save(loudness_output_path, loudness.squeeze(0).cpu().numpy())
+        print(f"響度特徵已保存至 {loudness_output_path}")
+
+        loudness_old_output_path = os.path.join(
+            self.output_dir, "loudness_old", f"{os.path.splitext(os.path.basename(self.wav_file_path))[0]}.npy")
+        np.save(loudness_old_output_path, loudness.squeeze(0).cpu().numpy())
+        print(f"響度特徵已保存至 {loudness_old_output_path}")
+
+
+class FrequencyToMIDI:
+    def __init__(self, npy_file_path):
+        """初始化類別，載入頻率數據"""
+        self.npy_file_path = npy_file_path
+        self.frequency_data = self._load_frequency_data()
+
+    def _load_frequency_data(self):
+        """安全載入頻率數據"""
+        try:
+            frequency_data = np.load(self.npy_file_path)
+            if len(frequency_data) == 0:
+                print("警告：頻率數據為空")
+            return frequency_data
+        except Exception as e:
+            print(f"錯誤：無法載入頻率數據 - {e}")
+            return np.array([])
+
+    def calculate_midi(self):
+        """計算並顯示 MIDI 音符"""
+        if len(self.frequency_data) == 0:
+            print("頻率數據為空")
+            return None
+
+        # 計算主頻率（取平均值）
+        main_frequency = np.mean(self.frequency_data)
+
+        # 檢查是否為 NaN
+        if np.isnan(main_frequency):
+            print("錯誤：計算出的主頻率為 NaN")
+            return None
+
+        midi_value = int(round(librosa.hz_to_midi(main_frequency)))
+        print(f"計算出的主頻率: {main_frequency:.2f} Hz")
+        print(f"對應的 MIDI 音符: {midi_value}")
+        return midi_value
+
+    def calculate_midi_threaded(self):
+        """線程安全的 MIDI 計算方法"""
+        # 使用線程執行計算，避免阻塞主線程
+        thread = threading.Thread(target=self.calculate_midi)
+        thread.start()
+        thread.join()  # 等待線程結束
+
+def rename_files(base_dir, midi_value):
+    """
+    遍歷資料夾內的所有檔案，並根據給定的 MIDI 值進行檔案改名。
+    :param base_dir: 要遍歷的資料夾路徑
+    :param midi_value: 用來替換檔案名稱中的 XXX 部分的 MIDI 值
+    """
+    print("已執行")
+    global new_file_name, new_file_name_no_ext
+    # 遍歷資料夾內的所有子資料夾
+    for subfolder in os.listdir(base_dir):
+        subfolder_path = os.path.join(base_dir, subfolder)
+
+        # 確保是資料夾
+        if os.path.isdir(subfolder_path):
+            # 遍歷該子資料夾中的所有檔案
+            for file_name in os.listdir(subfolder_path):
+                if file_name.endswith('.npy') or file_name.endswith('.wav'):
+                    old_file_path = os.path.join(subfolder_path, file_name)
+
+                    # 檢查檔案名稱格式，假設檔案名稱為 'piano20250108_055613_000-XXX-050.npy'
+                    if '-' in file_name:
+                        parts = file_name.split('-')
+
+                        # 如果檔案名稱正確分為三個部分
+                        if len(parts) == 3 and parts[1] == "XXX":
+
+                            file_ext = os.path.splitext(
+                                file_name)[1]  # 取得原始副檔名 (.npy 或 .wav)
+                            new_file_name = f"{parts[0]}-{str(midi_value).zfill(3)}-050{file_ext}"
+                            # 根據 MIDI 值進行改名，XXX 部分會被替換成 midi_value
+                            # new_file_name = f"{parts[0]}-{str(midi_value).zfill(3)}-050.npy"
+
+                            # 定義新檔案的路徑
+                            new_file_path = os.path.join(
+                                subfolder_path, new_file_name)
+                            new_file_name_no_ext = os.path.splitext(new_file_name)[
+                                0]  # 取得無副檔名的名稱
+                            # 進行檔案改名
+                            os.rename(old_file_path, new_file_path)
+                            print(
+                                f'Renamed: {old_file_path} -> {new_file_path}')
+
+                            # 設定檔案路徑與目標資料夾
+                            new_file_path = new_file_path  # 你的檔案路徑
+                            target_dir = "nsynth-subset2/test/signal"  # 目標資料夾
+                            # 確保目標資料夾存在
+                            if not os.path.exists(target_dir):
+                                os.makedirs(target_dir)
+                            # 複製檔案
+                            final_destination = os.path.join(
+                                target_dir, os.path.basename(new_file_path))
+                            shutil.copy(new_file_path, final_destination)
+                            print(
+                                f'已複製: {new_file_path} -> {final_destination}')
+
+                            source_dir_1 = "nsynth-subset5/audio"  # 原始資料夾
+                            target_dir_1 = "nsynth-subset4/test"  # 目標資料夾
+
+                            for root, dirs, files in os.walk(source_dir_1):
+                                # 設定目標資料夾路徑
+                                target_root = root.replace(
+                                    source_dir_1, target_dir_1)
+
+                                # 確保目標資料夾存在
+                                if not os.path.exists(target_root):
+                                    os.makedirs(target_root)
+
+                                # 複製檔案
+                                for file_name in files:
+                                    if file_name.endswith('.npy') or file_name.endswith('.wav'):
+                                        source_file_path = os.path.join(
+                                            root, file_name)
+                                        target_file_path = os.path.join(
+                                            target_root, file_name)
+                                        shutil.copy(
+                                            source_file_path, target_file_path)
+                                        print(
+                                            f'已複製: {source_file_path} -> {target_file_path}')
+    return new_file_name_no_ext
+
+
+def rename_files_1(base_dir, midi_value):
+    """
+    遍歷資料夾內的所有檔案，並根據給定的 MIDI 值進行檔案改名。
+    :param base_dir: 要遍歷的資料夾路徑
+    :param midi_value: 用來替換檔案名稱中的 XXX 部分的 MIDI 值
+    """
+    print("已執行")
+    global new_file_name, new_file_name_no_ext
+    # 遍歷資料夾內的所有子資料夾
+    for subfolder in os.listdir(base_dir):
+        subfolder_path = os.path.join(base_dir, subfolder)
+
+        # 確保是資料夾
+        if os.path.isdir(subfolder_path):
+            # 遍歷該子資料夾中的所有檔案
+            for file_name in os.listdir(subfolder_path):
+                if file_name.endswith('.npy') or file_name.endswith('.wav'):
+                    old_file_path = os.path.join(subfolder_path, file_name)
+
+                    # 檢查檔案名稱格式，假設檔案名稱為 'piano20250108_055613_000-XXX-050.npy'
+                    if '-' in file_name:
+                        parts = file_name.split('-')
+
+                        # 如果檔案名稱正確分為三個部分
+                        if len(parts) == 3 and parts[1] == "XXX":
+
+                            file_ext = os.path.splitext(
+                                file_name)[1]  # 取得原始副檔名 (.npy 或 .wav)
+                            new_file_name = f"{parts[0]}-{str(midi_value).zfill(3)}-050{file_ext}"
+                            # 根據 MIDI 值進行改名，XXX 部分會被替換成 midi_value
+                            # new_file_name = f"{parts[0]}-{str(midi_value).zfill(3)}-050.npy"
+
+                            # 定義新檔案的路徑
+                            new_file_path = os.path.join(
+                                subfolder_path, new_file_name)
+                            new_file_name_no_ext = os.path.splitext(new_file_name)[
+                                0]  # 取得無副檔名的名稱
+                            # 進行檔案改名
+                            os.rename(old_file_path, new_file_path)
+                            print(
+                                f'Renamed: {old_file_path} -> {new_file_path}')
+
+                            # 設定檔案路徑與目標資料夾
+                            new_file_path = new_file_path  # 你的檔案路徑
+                            target_dir = "nsynth-subset2/test/signal"  # 目標資料夾
+                            # 確保目標資料夾存在
+                            if not os.path.exists(target_dir):
+                                os.makedirs(target_dir)
+                            # 複製檔案
+                            final_destination = os.path.join(
+                                target_dir, os.path.basename(new_file_path))
+                            shutil.copy(new_file_path, final_destination)
+                            print(
+                                f'已複製: {new_file_path} -> {final_destination}')
+
+                            source_dir_1 = "nsynth-subset5/Piano"  # 原始資料夾
+                            target_dir_1 = "nsynth-subset4/test"  # 目標資料夾
+
+                            for root, dirs, files in os.walk(source_dir_1):
+                                # 設定目標資料夾路徑
+                                target_root = root.replace(
+                                    source_dir_1, target_dir_1)
+
+                                # 確保目標資料夾存在
+                                if not os.path.exists(target_root):
+                                    os.makedirs(target_root)
+
+                                # 複製檔案
+                                for file_name in files:
+                                    if file_name.endswith('.npy') or file_name.endswith('.wav'):
+                                        source_file_path = os.path.join(
+                                            root, file_name)
+                                        target_file_path = os.path.join(
+                                            target_root, file_name)
+                                        shutil.copy(
+                                            source_file_path, target_file_path)
+                                        print(
+                                            f'已複製: {source_file_path} -> {target_file_path}')
+
+    return new_file_name_no_ext
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
